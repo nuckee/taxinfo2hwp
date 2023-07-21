@@ -65,6 +65,11 @@ else:
 # Call the function to perform value substitution and get the updated XML content
 xml_output_result = replace_values_in_xml(csv_file, xml_file)
 
+
+
+# '%영문자숫자%' 패턴의 문자열을 제거합니다.
+xml_output_result = re.sub(r'%[a-zA-Z0-9]+%', '', xml_output_result)
+
 # Save the result to the "sample_output.xml" file
 with open('sample_output.xml', 'wt', encoding='UTF-8') as file:
     file.write(xml_output_result)
