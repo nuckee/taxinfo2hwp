@@ -33,12 +33,13 @@ def replace_values_in_xml(csv_file, xml_file):
         xml_content = re.sub(re.escape(placeholder), value, xml_content)
 
     # Replace F2 to L2 up to F(num_tax_numbers + 1) to L(num_tax_numbers + 1)
-    for row_num in range(2, num_tax_numbers + 2):
+    for row_num in range(1, num_tax_numbers + 2):
         if row_num < len(data):
             for i in range(6, 13):
                 if i - 1 < len(data[row_num]):
-                    placeholder = f'%{chr(64 + i)}{row_num}%'
+                    placeholder = f'%{chr(64 + i)}{row_num + 1}%'
                     value = data[row_num][i - 1]
+                    print(f'{placeholder}, row_num : {row_num}, Value : {value}')
                     xml_content = re.sub(re.escape(placeholder), value, xml_content)
 
     # Save the updated XML content to the xml_output_result variable
