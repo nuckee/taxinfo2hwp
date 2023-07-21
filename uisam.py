@@ -1,3 +1,4 @@
+import sys
 import csv
 import re
 import os
@@ -36,6 +37,9 @@ def replace_values_in_xml(csv_file, xml_file):
         placeholder = f'%{chr(64 + i)}2%'  # %A2%, %B2%, ...
         xml_content = re.sub(re.escape(placeholder), value, xml_content)
 
+    column_to_check = 6
+    num_tax_numbers = find_last_nonempty_row(csv_file, column_to_check)
+ 
     # Replace F2 to L2 up to F(num_tax_numbers + 1) to L(num_tax_numbers + 1)
     for row_num in range(1, num_tax_numbers + 2):
         if row_num < len(data):
@@ -103,6 +107,10 @@ class ConverterApp(QWidget):
         self.progress_dialog.canceled.connect(self.cancel_conversion)
 
         self.converter_thread = None
+
+    def cancel_conversion(self):
+        # Todo
+        pass
 
     def select_directory(self):
         options = QFileDialog.Options()
