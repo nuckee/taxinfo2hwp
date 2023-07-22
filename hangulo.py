@@ -8,6 +8,25 @@ import time
 from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QFileDialog, QProgressDialog, QMessageBox
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject
 
+def get_config_value(key):
+    """
+    주어진 key에 해당하는 값을 config 파일에서 가져오는 함수입니다.
+
+    Parameters:
+        key (str): 찾을 값의 key
+
+    Returns:
+        str: key에 해당하는 값 (찾을 수 없으면 None 반환)
+    """
+    config = configparser.ConfigParser()
+    config.read('config.ini')
+
+    value = None
+    if 'Section1' in config and key in config['Section1']:
+        value = config['Section1'][key]
+
+    return value
+
 def find_last_nonempty_row(csv_file, column):
     # Find the index of the last non-empty row in the specified column of the CSV file
     with open(csv_file, 'rt', encoding='UTF-8') as file:
@@ -67,13 +86,16 @@ def replace_values_in_xml(csv_file, xml_file):
         xml_content = file.read()
 
         # Need to make configuration file below later because it has a problem to have text overlap)
+        # config_value = get_config_value(key_input)
+
+        # TODO
+
         pattern = r'%I\d+%'
         matches = re.finditer(pattern, xml_content)
         for match in matches:
             i_start, i_end = match.span()
             linesegarray_end = xml_content.find("</hp:linesegarray>", i_end)
             if linesegarray_end != -1:
-                print('*******************************************')
                 insertion_text = '<hp:lineseg textpos="4" vertpos="1600" vertsize="1000" textheight="1000" baseline="850" spacing="600" horzpos="0" horzsize="4348" flags="393216"/>'
                 xml_content = xml_content[:linesegarray_end] + insertion_text + xml_content[linesegarray_end:]
 
@@ -98,6 +120,14 @@ def replace_values_in_xml(csv_file, xml_file):
                     if row_num > 0 and i == 12:
                         amount = int(value)
                         total_sum += amount
+                    
+                    # Need to make configuration file below later
+
+                    # config_value = get_config_value(key_input)
+
+                    # TODO
+                    if (row_num > 0 and i > 9):
+                        value = "{:,.0f}".format(int(value))
                     print(f'{placeholder}, row_num : {row_num}, Value : {value}')
                     xml_content = re.sub(re.escape(placeholder), value, xml_content)
 
@@ -138,17 +168,13 @@ class ConverterThread(QThread):
         for i, filename in enumerate(csv_files):
             file_path = os.path.join(self.directory, filename)
             num_tax_numbers = find_last_nonempty_row(file_path, 6)
-            additional_tax_numbers = num_tax_numbers - 3 
-            if additional_tax_numbers <= 0:
-                hwpx_file = 'tax-template.hwpx'
-            else:
-                hwpx_file = f'tax-template-{additional_tax_numbers}.hwpx'
+            hwpx_file = f'template-tax-{num_tax_numbers}.hwpx'
             hwpx_file_name = os.path.splitext(hwpx_file)[0]
             zip_file = f'{hwpx_file_name}.zip'
             shutil.copy(hwpx_file, zip_file)
 
             with zipfile.ZipFile(zip_file, 'r') as zip_ref:
-                extract_to = '.temp_hangulo'
+                extract_to = '.hangulo'
                 if not os.path.exists(extract_to):
                     os.makedirs(extract_to)
                 hwpx_dir = os.path.join(extract_to, hwpx_file_name)
@@ -163,7 +189,7 @@ class ConverterThread(QThread):
             xml_output_result = replace_values_in_xml(file_path, xml_file_path)
 
             # '%영문자숫자%' 패턴의 문자열을 제거합니다.
-            xml_output_result = re.sub(r'%[a-zA-Z0-9]+%', '', xml_output_result)
+            # xml_output_result = re.sub(r'%[a-zA-Z0-9]+%', '', xml_output_result)
            
             # 디렉토리를 복사합니다.
             gen_hwpx_file_name = os.path.splitext(filename)[0]
@@ -209,6 +235,14 @@ class ConverterThread(QThread):
 
             shutil.make_archive(gen_zip_file_name_path, 'zip', gen_hwpx_dir)
 
+            # 디렉토리가 존재하는지 확인합니다.
+            if os.path.exists(gen_hwpx_dir):
+                # 디렉토리를 삭제합니다.
+                try:
+                    shutil.rmtree(gen_hwpx_dir)
+                except OSError as e:
+                    self.message_signal.message_signal.emit('변환 실패', f"기존에 생성된 디렉토리 '{gen_hwpx_dir}'를 삭제할 수 없습니다. '{gen_hwpx_dir}' 를 삭제한 뒤 다시 시도해 주세요. 오류: {e}", 'warning')
+                    sys.exit(1)
 
             shutil.copy(gen_zip_file_path, gen_hwpx_file_path)
 
