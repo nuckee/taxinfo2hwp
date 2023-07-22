@@ -1,6 +1,7 @@
 import sys
 import csv
 import re
+import zipfile
 import os
 import shutil
 import time
@@ -20,6 +21,38 @@ def find_last_nonempty_row(csv_file, column):
 
     return last_nonempty_row - 1
 
+def number_to_korean_amount(number):
+    """
+    주어진 숫자를 한글로 변환하여 금액 표현과 함께 리턴하는 함수입니다.
+
+    Parameters:
+        number (int): 변환할 숫자
+
+    Returns:
+        str: 한글로 변환된 금액 표현 (예: "128,600원(금일십이만팔천육백원정)")
+    """
+    korean_numbers = ["일", "이", "삼", "사", "오", "육", "칠", "팔", "구"]
+    korean_units = ["", "십", "백", "천"]
+    korean_big_units = ["", "만", "억", "조", "경", "해", "경", "조", "억", "만"]
+
+    number_str = str(number)
+    result = []
+    length = len(number_str)
+
+    for i, digit in enumerate(number_str):
+        num = int(digit)
+        unit_index = (length - 1 - i) % 4
+        if num != 0:
+            if i > 0 and unit_index == 0 and number_str[i - 1] == '1':
+                result.append(korean_numbers[0])
+            else:
+                result.append(korean_numbers[num - 1])
+            result.append(korean_units[unit_index])
+        if unit_index == 0 and i < length - 1:
+            result.append(korean_big_units[(length - 1 - i) // 4])
+
+    return "금" + "".join(result) + "원정)"
+
 def replace_values_in_xml(csv_file, xml_file):
     # Read CSV file
     with open(csv_file, 'rt', encoding='UTF-8') as file:
@@ -33,6 +66,17 @@ def replace_values_in_xml(csv_file, xml_file):
     with open(xml_file, 'rt', encoding='UTF-8') as file:
         xml_content = file.read()
 
+        # Need to make configuration file below later because it has a problem to have text overlap)
+        pattern = r'%I\d+%'
+        matches = re.finditer(pattern, xml_content)
+        for match in matches:
+            i_start, i_end = match.span()
+            linesegarray_end = xml_content.find("</hp:linesegarray>", i_end)
+            if linesegarray_end != -1:
+                print('*******************************************')
+                insertion_text = '<hp:lineseg textpos="4" vertpos="1600" vertsize="1000" textheight="1000" baseline="850" spacing="600" horzpos="0" horzsize="4348" flags="393216"/>'
+                xml_content = xml_content[:linesegarray_end] + insertion_text + xml_content[linesegarray_end:]
+
     # Perform value substitution in XML for F2 to L2 up to F(num_tax_numbers) to L(num_tax_numbers)
     for i, value in enumerate(values, start=1):
         placeholder = f'%{chr(64 + i)}2%'  # %A2%, %B2%, ...
@@ -41,6 +85,9 @@ def replace_values_in_xml(csv_file, xml_file):
     column_to_check = 6
     num_tax_numbers = find_last_nonempty_row(csv_file, column_to_check)
  
+
+    total_sum = 0
+
     # Replace F2 to L2 up to F(num_tax_numbers + 1) to L(num_tax_numbers + 1)
     for row_num in range(1, num_tax_numbers + 2):
         if row_num < len(data):
@@ -48,8 +95,19 @@ def replace_values_in_xml(csv_file, xml_file):
                 if i - 1 < len(data[row_num]):
                     placeholder = f'%{chr(64 + i)}{row_num + 1}%'
                     value = data[row_num][i - 1]
+                    if row_num > 0 and i == 12:
+                        amount = int(value)
+                        total_sum += amount
                     print(f'{placeholder}, row_num : {row_num}, Value : {value}')
                     xml_content = re.sub(re.escape(placeholder), value, xml_content)
+
+    # Calculate the sum of amounts from L2 to L(num_tax_numbers + 1)
+    korean_amount_num = "{:,.0f}원".format(total_sum)
+    korean_amount_str = number_to_korean_amount(total_sum)
+    tax_total_amount_str = korean_amount_num + '(' + korean_amount_str  + ')'
+    xml_content = re.sub(re.escape("%TAX_TOTAL_AMOUNT_STR%"), tax_total_amount_str, xml_content)
+
+    xml_content = re.sub(re.escape("%TAX_TOTAL_AMOUNT%"), korean_amount_num, xml_content)
 
     # Save the updated XML content to the xml_output_result variable
     xml_output_result = xml_content
@@ -80,25 +138,84 @@ class ConverterThread(QThread):
         for i, filename in enumerate(csv_files):
             file_path = os.path.join(self.directory, filename)
             num_tax_numbers = find_last_nonempty_row(file_path, 6)
-            additional_tax_numbers = num_tax_numbers - 3
+            additional_tax_numbers = num_tax_numbers - 3 
             if additional_tax_numbers <= 0:
-                xml_file = 'sample.xml'
+                hwpx_file = 'tax-template.hwpx'
             else:
-                xml_file = f'sample-{additional_tax_numbers}.xml'
+                hwpx_file = f'tax-template-{additional_tax_numbers}.hwpx'
+            hwpx_file_name = os.path.splitext(hwpx_file)[0]
+            zip_file = f'{hwpx_file_name}.zip'
+            shutil.copy(hwpx_file, zip_file)
 
-            xml_output_result = replace_values_in_xml(file_path, xml_file)
+            with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+                extract_to = '.temp_hangulo'
+                if not os.path.exists(extract_to):
+                    os.makedirs(extract_to)
+                hwpx_dir = os.path.join(extract_to, hwpx_file_name)
+
+                if not os.path.exists(hwpx_dir):
+                    zip_ref.extractall(hwpx_dir)
+
+            contents_dir = os.path.join(hwpx_dir, 'Contents')
+            xml_file = 'section0.xml'
+
+            xml_file_path = os.path.join(contents_dir , xml_file)
+            xml_output_result = replace_values_in_xml(file_path, xml_file_path)
 
             # '%영문자숫자%' 패턴의 문자열을 제거합니다.
             xml_output_result = re.sub(r'%[a-zA-Z0-9]+%', '', xml_output_result)
+           
+            # 디렉토리를 복사합니다.
+            gen_hwpx_file_name = os.path.splitext(filename)[0]
+            gen_hwpx_dir = os.path.join(self.directory, gen_hwpx_file_name)
 
-            # Save the result to the "gen_sample.xml" file
-            gen_xml_file = os.path.join(self.directory, f'gen_{filename[:-4]}.xml')
-            with open(gen_xml_file, 'wt', encoding='UTF-8') as output_file:
+            # 디렉토리가 존재하는지 확인합니다.
+            if os.path.exists(gen_hwpx_dir):
+                # 디렉토리를 삭제합니다.
+                try:
+                    shutil.rmtree(gen_hwpx_dir)
+                except OSError as e:
+                    self.message_signal.message_signal.emit('변환 실패', f"기존에 생성된 디렉토리 '{gen_hwpx_dir}'를 삭제할 수 없습니다. '{gen_hwpx_dir}' 를 삭제한 뒤 다시 시도해 주세요. 오류: {e}", 'warning')
+                    sys.exit(1)
+            shutil.copytree(hwpx_dir, gen_hwpx_dir)
+            gen_contents_dir = os.path.join(gen_hwpx_dir, 'Contents')
+            gen_xml_file_path = os.path.join(gen_contents_dir , xml_file)
+
+            with open(gen_xml_file_path, 'wt', encoding='UTF-8') as output_file:
                 output_file.write(xml_output_result)
+    
+            # 디렉토리를 zip 파일로 압축합니다.
+            gen_zip_file_name_path = os.path.join(self.directory, gen_hwpx_file_name)
 
-            xsl_file = os.path.splitext(xml_file)[0] + '.xsl'
-            gen_xsl_file = os.path.join(self.directory, xsl_file)
-            shutil.copy(xsl_file, gen_xsl_file)
+            gen_zip_file_path = f'{gen_zip_file_name_path}.zip'
+
+            gen_hwpx_file = f'{gen_hwpx_file_name}.hwpx'
+            gen_hwpx_file_path = os.path.join(self.directory, gen_hwpx_file)
+
+            # zip 파일이 존재하는지 확인합니다.
+            if os.path.exists(gen_zip_file_path):
+                # 파일을 삭제합니다.
+                os.remove(gen_zip_file_path)
+
+            # Hwpx 파일이 존재하는지 확인합니다.
+            if os.path.exists(gen_hwpx_file_path):
+                # 파일 이름을 삭제합니다.
+                try:
+                    os.remove(gen_hwpx_file_path)
+                except OSError as e:
+                    self.message_signal.message_signal.emit('변환 실패', f"기존에 생성된 Hwp 파일 '{gen_hwpx_file_path}'를 삭제할 수 없습니다. 열린 '{gen_hwpx_file_path}' 를 닫은 뒤 다시 시도해 주세요. 오류: {e}", 'warning')
+                    sys.exit(1)
+                
+
+            shutil.make_archive(gen_zip_file_name_path, 'zip', gen_hwpx_dir)
+
+
+            shutil.copy(gen_zip_file_path, gen_hwpx_file_path)
+
+            # zip 파일이 존재하는지 확인합니다.
+            if os.path.exists(gen_zip_file_path):
+                # 파일을 삭제합니다.
+                os.remove(gen_zip_file_path)
 
             time.sleep(1)  # 컨버팅 시뮬레이션을 위한 딜레이
             progress_percent = int((i + 1) / total_files * 100)

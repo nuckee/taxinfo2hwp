@@ -4,7 +4,7 @@ import re
 import os
 import time
 from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QFileDialog, QProgressDialog, QMessageBox
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject
 
 def find_last_nonempty_row(csv_file, column):
     # Find the index of the last non-empty row in the specified column of the CSV file
@@ -58,36 +58,47 @@ def replace_values_in_xml(csv_file, xml_file):
 
     return xml_output_result
 
+class MessageSignal(QObject):
+    message_signal = pyqtSignal(str)
+
 class ConverterThread(QThread):
     progress_signal = pyqtSignal(int)
 
     def __init__(self, directory):
         super().__init__()
         self.directory = directory
+        self.message_signal = MessageSignal()
 
     def run(self):
-        total_files = len([filename for filename in os.listdir(self.directory) if filename.endswith('.csv')])
-        for i, filename in enumerate(os.listdir(self.directory)):
-            if filename.endswith('.csv'):
-                file_path = os.path.join(self.directory, filename)
-                num_tax_numbers = find_last_nonempty_row(file_path, 6)
-                additional_tax_numbers = num_tax_numbers - 3
-                if additional_tax_numbers <= 0:
-                    xml_file = 'sample.xml'
-                else:
-                    xml_file = f'sample-{additional_tax_numbers}.xml'
-                xml_output_result = replace_values_in_xml(file_path, xml_file)
+        csv_files = [filename for filename in os.listdir(self.directory) if filename.endswith('.csv')]
+        if not csv_files:
+            self.message_signal.message_signal.emit('There are no .csv files in the selected directory.')
+            return
 
-                # '%영문자숫자%' 패턴의 문자열을 제거합니다.
-                xml_output_result = re.sub(r'%[a-zA-Z0-9]+%', '', xml_output_result)
+        total_files = len(csv_files)
+        for i, filename in enumerate(csv_files):
+            file_path = os.path.join(self.directory, filename)
+            num_tax_numbers = find_last_nonempty_row(file_path, 6)
+            additional_tax_numbers = num_tax_numbers - 3
+            if additional_tax_numbers <= 0:
+                xml_file = 'sample.xml'
+            else:
+                xml_file = f'sample-{additional_tax_numbers}.xml'
+            xml_output_result = replace_values_in_xml(file_path, xml_file)
 
-                # Save the result to the "sample_output.xml" file
-                with open(f'{filename[:-4]}_output.xml', 'wt', encoding='UTF-8') as output_file:
-                    output_file.write(xml_output_result)
+            # '%영문자숫자%' 패턴의 문자열을 제거합니다.
+            xml_output_result = re.sub(r'%[a-zA-Z0-9]+%', '', xml_output_result)
+
+            # Save the result to the "sample_output.xml" file
+            with open(f'{filename[:-4]}_output.xml', 'wt', encoding='UTF-8') as output_file:
+                output_file.write(xml_output_result)
 
             time.sleep(1)  # 컨버팅 시뮬레이션을 위한 딜레이
             progress_percent = int((i + 1) / total_files * 100)
             self.progress_signal.emit(progress_percent)
+
+        self.message_signal.message_signal.emit('Conversion completed.')
+
 
 class ConverterApp(QWidget):
     def __init__(self):
@@ -105,8 +116,13 @@ class ConverterApp(QWidget):
         self.progress_dialog = QProgressDialog('Converting...', 'Cancel', 0, 100, self)
         self.progress_dialog.setWindowModality(Qt.WindowModal)
         self.progress_dialog.canceled.connect(self.cancel_conversion)
-
         self.converter_thread = None
+
+        self.message_signal = MessageSignal()
+        self.message_signal.message_signal.connect(self.show_message)
+
+    def show_message(self, message):
+        QMessageBox.warning(self, 'No CSV Files', message)
 
     def cancel_conversion(self):
         # Todo
@@ -130,4 +146,3 @@ if __name__ == '__main__':
     converter_app = ConverterApp()
     converter_app.show()
     sys.exit(app.exec_())
-
