@@ -5,8 +5,13 @@ import zipfile
 import os
 import shutil
 import time
+import configparser
 from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QFileDialog, QProgressDialog, QMessageBox
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject
+
+# Initialize an empty list to store the strings
+invalid_file_list = []
+
 
 def get_config_value(key):
     """
@@ -19,7 +24,14 @@ def get_config_value(key):
         str: key에 해당하는 값 (찾을 수 없으면 None 반환)
     """
     config = configparser.ConfigParser()
-    config.read('config.ini')
+    try:
+        # Open the 'config.ini' file with 'utf-8' encoding
+        with open('config.ini', 'r', encoding='utf-8') as file:
+            config.read_file(file)
+    except UnicodeDecodeError as e:
+        print(f"An error occurred while reading 'config.ini': {e}")
+        # Handle the error or use a different encoding if necessary
+
 
     value = None
     if 'Section1' in config and key in config['Section1']:
@@ -62,7 +74,7 @@ def number_to_korean_amount(number):
         num = int(digit)
         unit_index = (length - 1 - i) % 4
         if num != 0:
-            if i > 0 and unit_index == 0 and number_str[i - 1] == '1':
+            if i > 0 and unit_index == 0 and number_str[i] == '1':
                 result.append(korean_numbers[0])
             else:
                 result.append(korean_numbers[num - 1])
@@ -70,7 +82,7 @@ def number_to_korean_amount(number):
         if unit_index == 0 and i < length - 1:
             result.append(korean_big_units[(length - 1 - i) // 4])
 
-    return "금" + "".join(result) + "원정)"
+    return "금" + "".join(result) + "원정"
 
 def replace_values_in_xml(csv_file, xml_file):
     # Read CSV file
@@ -89,15 +101,37 @@ def replace_values_in_xml(csv_file, xml_file):
         # config_value = get_config_value(key_input)
 
         # TODO
+        
+    pattern = r'%(\w+)%'
+    print(csv_file)
+    # print(xml_content.encode('utf-8').decode('utf-8'))
+    # sys.exit(0)
+    allMatches = re.findall(pattern, xml_content)
+    # Convert the list to a set to remove duplicates, and then back to a list
+    matches = list(set(allMatches))
 
-        pattern = r'%I\d+%'
-        matches = re.finditer(pattern, xml_content)
-        for match in matches:
-            i_start, i_end = match.span()
-            linesegarray_end = xml_content.find("</hp:linesegarray>", i_end)
-            if linesegarray_end != -1:
-                insertion_text = '<hp:lineseg textpos="4" vertpos="1600" vertsize="1000" textheight="1000" baseline="850" spacing="600" horzpos="0" horzsize="4348" flags="393216"/>'
-                xml_content = xml_content[:linesegarray_end] + insertion_text + xml_content[linesegarray_end:]
+    for key in matches:
+        value = get_config_value(key)
+        if value is not None:
+            count = xml_content.count(f"%{key}%")
+
+            pattern_to_replace = f"%{key}%"
+
+            for i in range(2, count + 2):
+                replaced_value = f"%{value}{i}%"
+                xml_content = xml_content.replace(pattern_to_replace, replaced_value, 1)
+
+    # '세목' 란은 Hwp 파일이 생성되었을 때 글자들이 오버랩되어 표시된다.
+    # 따라서 해당 항목은 오버랩을 방지하는 xml 을 넣어준다.
+    protectedOverlapCell = get_config_value("세목")
+    pattern = rf'%{protectedOverlapCell}\d+%'
+    matches = re.finditer(pattern, xml_content)
+    for match in matches:
+        i_start, i_end = match.span()
+        linesegarray_end = xml_content.find("</hp:linesegarray>", i_end)
+        if linesegarray_end != -1:
+            insertion_text = '<hp:lineseg textpos="4" vertpos="1600" vertsize="1000" textheight="1000" baseline="850" spacing="600" horzpos="0" horzsize="4348" flags="393216"/>'
+            xml_content = xml_content[:linesegarray_end] + insertion_text + xml_content[linesegarray_end:]
 
     # Perform value substitution in XML for F2 to L2 up to F(num_tax_numbers) to L(num_tax_numbers)
     for i, value in enumerate(values, start=1):
@@ -110,6 +144,16 @@ def replace_values_in_xml(csv_file, xml_file):
 
     total_sum = 0
 
+    # 세액, 가산금, 계 항목은 모두 금액이므로 , 콤마 처리하기 위해 해당 열을 가져온다.
+    needComma1 = get_config_value("세액")
+    needComma2 = get_config_value("가산금")
+    needComma3 = get_config_value("계")
+
+    # 아래에서 'A' 를 1로 취급하므로, 모든 아스키 값에 - 64 로 한다.
+    needCommaNum1 = ord(needComma1) - 64
+    needCommaNum2 = ord(needComma2) - 64
+    needCommaNum3 = ord(needComma3) - 64
+
     # Replace F2 to L2 up to F(num_tax_numbers + 1) to L(num_tax_numbers + 1)
     for row_num in range(1, num_tax_numbers + 2):
         if row_num < len(data):
@@ -121,14 +165,10 @@ def replace_values_in_xml(csv_file, xml_file):
                         amount = int(value)
                         total_sum += amount
                     
-                    # Need to make configuration file below later
-
-                    # config_value = get_config_value(key_input)
-
-                    # TODO
-                    if (row_num > 0 and i > 9):
+                    # 위에서 아스키 값으로 계산한 needCommaNum1, needCommaNum2, needCommaNum3 으로 확인하여 콤마 처리한다.
+                    if (row_num > 0 and ((i == needCommaNum1) or (i == needCommaNum2) or (i == needCommaNum3))):
                         value = "{:,.0f}".format(int(value))
-                    print(f'{placeholder}, row_num : {row_num}, Value : {value}')
+                    print(f'{placeholder}, row_num : {row_num}, i : {i}, Value : {value}')
                     xml_content = re.sub(re.escape(placeholder), value, xml_content)
 
     # Calculate the sum of amounts from L2 to L(num_tax_numbers + 1)
@@ -167,7 +207,15 @@ class ConverterThread(QThread):
         total_files = len(csv_files)
         for i, filename in enumerate(csv_files):
             file_path = os.path.join(self.directory, filename)
-            num_tax_numbers = find_last_nonempty_row(file_path, 6)
+            try:
+                num_tax_numbers = find_last_nonempty_row(file_path, 6)
+            except:
+                self.message_signal.message_signal.emit('FAIL!!!!!!!!!', 'CSV 인코딩이 예상과 다릅니다!', 'warning')
+                sys.exit(1)
+            if (num_tax_numbers > 5):
+                invalid_file_list.append(filename)
+                continue
+
             hwpx_file = f'template-tax-{num_tax_numbers}.hwpx'
             hwpx_file_name = os.path.splitext(hwpx_file)[0]
             zip_file = f'{hwpx_file_name}.zip'
@@ -186,8 +234,13 @@ class ConverterThread(QThread):
             xml_file = 'section0.xml'
 
             xml_file_path = os.path.join(contents_dir , xml_file)
-            xml_output_result = replace_values_in_xml(file_path, xml_file_path)
 
+            xml_output_result = replace_values_in_xml(file_path, xml_file_path)
+            # try:
+            #     xml_output_result = replace_values_in_xml(file_path, xml_file_path)
+            # except Exception as e:
+            #     self.message_signal.message_signal.emit('변환 실패', f"템플릿 Hwp 파일 '{xml_file}'에서 잘못된 형식의 '%변수%'가 존재합니다. '{xml_file}' 를 올바르게 수정한 뒤 다시 시도해 주세요.", 'warning')
+            #     sys.exit(1)                    
             # '%영문자숫자%' 패턴의 문자열을 제거합니다.
             # xml_output_result = re.sub(r'%[a-zA-Z0-9]+%', '', xml_output_result)
            
@@ -255,7 +308,14 @@ class ConverterThread(QThread):
             progress_percent = int((i + 1) / total_files * 100)
             self.progress_signal.emit(progress_percent)
 
-        self.message_signal.message_signal.emit('Conversion completed', 'the conversion is completed.', 'info')
+        appended_invalid_files = ''
+        for invalid_file in invalid_file_list:
+            appended_invalid_files += ', '
+            appended_invalid_files += invalid_file
+
+        if (appended_invalid_files != ''):
+            self.message_signal.message_signal.emit('Hwp로 변환 완료', f"변환 완료하였지만 (변환 Hwp 위치: '{self.directory}'), '{appended_invalid_files}'는 6개 이상 건수를 가지고 있어 변환할 수 없습니다!", 'warning')
+        self.message_signal.message_signal.emit('Hwp로 변환 완료', f"변환 완료하였습니다. (변환 Hwp 위치: '{self.directory}')", 'info')
 
 class ConverterApp(QWidget):
     def __init__(self):
@@ -288,8 +348,12 @@ class ConverterApp(QWidget):
         if directory:
             print(f'Selected directory: {directory}')
             self.progress_dialog = QProgressDialog('Converting...', 'Cancel', 0, 100, self)
+            self.progress_dialog.setWindowTitle("Hwp로 변환");
+            self.progress_dialog.setMinimumWidth(300);
             self.progress_dialog.setWindowModality(Qt.WindowModal)
             self.progress_dialog.canceled.connect(self.cancel_conversion)
+            # Disable the Cancel button
+            self.progress_dialog.setCancelButton(None)
             self.progress_dialog.setValue(0)
             self.progress_dialog.show()
             self.converter_thread = ConverterThread(directory)
