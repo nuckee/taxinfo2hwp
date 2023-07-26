@@ -2,6 +2,7 @@ import sys
 import csv
 import re
 import zipfile
+import pandas as pd
 import os
 import shutil
 import time
@@ -12,6 +13,7 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject
 # Initialize an empty list to store the strings
 invalid_file_list = []
 
+hangulo_folder = ".hangulo"
 
 def get_config_value(key):
     """
@@ -38,6 +40,32 @@ def get_config_value(key):
         value = config['Section1'][key]
 
     return value
+
+def get_column_indices(csv_file, column_names):
+    try:
+        with open(csv_file, newline='', encoding='utf-8') as csvfile:
+            reader = csv.reader(csvfile)
+            header_row = next(reader)  # Get the header row
+
+            # Find the indices of the given column names in the header row
+            column_indices = [header_row.index(column_name) for column_name in column_names]
+
+            return column_indices
+    except FileNotFoundError:
+        print(f"CSV file '{csv_file}' not found.")
+        return None
+    except ValueError as e:
+        print(f"Error occurred: {e}")
+        return None
+
+def column_name_to_index(column_name):
+    base = 26
+    result = 0
+
+    for char in column_name:
+        result = result * base + (ord(char) - ord('A') + 1)
+
+    return result - 1
 
 def find_last_nonempty_row(csv_file, column):
     # Find the index of the last non-empty row in the specified column of the CSV file
@@ -83,6 +111,75 @@ def number_to_korean_amount(number):
             result.append(korean_big_units[(length - 1 - i) // 4])
 
     return "금" + "".join(result) + "원정"
+
+
+def xlsx_to_csv_convert(xlsx_file_path):
+    try:
+        # Check if the input file exists
+        if not os.path.exists(xlsx_file_path):
+            raise FileNotFoundError(f"The XLSX file '{xlsx_file_path}' does not exist.")
+
+        # Get the XLSX file name without extension
+        file_name = os.path.splitext(os.path.basename(xlsx_file_path))[0]
+
+        # Create the .hangulo folder if it doesn't exist
+        if not os.path.exists(hangulo_folder):
+            os.makedirs(hangulo_folder)
+
+        # Generate the CSV file path within the .hangulo folder
+        csv_file_path = os.path.join(hangulo_folder, f"{file_name}.csv")
+
+        # Convert XLSX to CSV
+        df = pd.read_excel(xlsx_file_path)
+        df.to_csv(csv_file_path, index=False)
+
+        print(f"Conversion successful. {xlsx_file_path} converted to {csv_file_path}.")
+
+        return csv_file_path
+
+    except Exception as e:
+        print(f"Error occurred during conversion: {e}")
+        return None
+
+
+def get_csv_cell_value(csv_file_path, row_index, column_name):
+    try:
+        # Read the CSV file using pandas
+        df = pd.read_csv(csv_file_path)
+
+        # Check if the row index is within the DataFrame's row range
+        if row_index < 0 or row_index >= len(df):
+            raise ValueError(f"Row index out of range: {row_index}")
+
+        # Get the index of the specified column name
+        column_index = df.columns.get_loc(column_name)
+
+        # Extract the value at the specified row and column
+        cell_value = df.iat[row_index, column_index]
+
+        return cell_value
+    except FileNotFoundError:
+        print(f"CSV file '{csv_file_path}' not found.")
+        return None
+    except KeyError:
+        print(f"Column name '{column_name}' not found in the CSV file.")
+        return None
+    except ValueError as e:
+        print(f"Error occurred: {e}")
+        return None
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 def replace_values_in_xml(csv_file, xml_file):
     # Read CSV file
@@ -149,27 +246,31 @@ def replace_values_in_xml(csv_file, xml_file):
     needComma2 = get_config_value("가산금")
     needComma3 = get_config_value("계")
 
-    # 아래에서 'A' 를 1로 취급하므로, 모든 아스키 값에 - 64 로 한다.
-    needCommaNum1 = ord(needComma1) - 64
-    needCommaNum2 = ord(needComma2) - 64
-    needCommaNum3 = ord(needComma3) - 64
+    # column name ('A', 'B', 'C', ...) to index
+    needCommaNum1 = column_name_to_index(needComma1) + 1
+    needCommaNum2 = column_name_to_index(needComma2) + 1
+    needCommaNum3 = column_name_to_index(needComma3) + 1
+
+    # last column name: BV
+    lastIndex = column_name_to_index('BV') + 1
+    print("$$$$$$$$$$$$$$$$$$$$ ", needCommaNum1)
 
     # Replace F2 to L2 up to F(num_tax_numbers + 1) to L(num_tax_numbers + 1)
     for row_num in range(1, num_tax_numbers + 2):
         if row_num < len(data):
-            for i in range(6, 13):
+            for i in range(4, lastIndex):
                 if i - 1 < len(data[row_num]):
                     placeholder = f'%{chr(64 + i)}{row_num + 1}%'
                     value = data[row_num][i - 1]
-                    if row_num > 0 and i == 12:
-                        amount = int(value)
-                        total_sum += amount
                     
                     # 위에서 아스키 값으로 계산한 needCommaNum1, needCommaNum2, needCommaNum3 으로 확인하여 콤마 처리한다.
                     if (row_num > 0 and ((i == needCommaNum1) or (i == needCommaNum2) or (i == needCommaNum3))):
-                        value = "{:,.0f}".format(int(value))
+                        print("$$$$$$$$$$$$$$$$$$$$ ", value)
+                        amount = int(value.replace(',', ''))
+                        total_sum += amount
+                    print("$$$$$$$$$$$$$$$$$$$$ ", value)
                     print(f'{placeholder}, row_num : {row_num}, i : {i}, Value : {value}')
-                    xml_content = re.sub(re.escape(placeholder), value, xml_content)
+                    # xml_content = re.sub(re.escape(placeholder), value, xml_content)
 
     # Calculate the sum of amounts from L2 to L(num_tax_numbers + 1)
     korean_amount_num = "{:,.0f}원".format(total_sum)
@@ -199,18 +300,34 @@ class ConverterThread(QThread):
         self.message_signal = MessageSignal()
 
     def run(self):
-        csv_files = [filename for filename in os.listdir(self.directory) if filename.endswith('.csv')]
-        if not csv_files:
-            self.message_signal.message_signal.emit('No CSV Files', 'There are no .csv files in the selected directory.', 'warning')
+        # Check if the .hangulo folder exists and is empty
+        if os.path.exists(hangulo_folder):
+            try:
+                # Remove the .hangulo folder
+                shutil.rmtree(hangulo_folder)
+                print(f"The '{hangulo_folder}' folder has been deleted.")
+            except Exception as e:
+                print(f"Error occurred while deleting the folder: {e}")
+        else:
+            print(f"The '{hangulo_folder}' folder does not exist.")
+
+
+        xlsx_files = [filename for filename in os.listdir(self.directory) if filename.endswith('.xlsx')]
+        if not xlsx_files:
+            self.message_signal.message_signal.emit('No XLSX Files', 'There are no .xlsx files in the selected directory.', 'warning')
             return
 
-        total_files = len(csv_files)
-        for i, filename in enumerate(csv_files):
+        total_files = len(xlsx_files)
+        for i, filename in enumerate(xlsx_files):
             file_path = os.path.join(self.directory, filename)
+            csv_file_path = xlsx_to_csv_convert(file_path)
+            if csv_file_path is None:
+                self.message_signal.message_signal.emit('변환 실패', f"XLSX 파일이 열려 있거나, 잘못된 XLSX 파일이 있습니다.", 'warning')
+                sys.exit(1)
             try:
-                num_tax_numbers = find_last_nonempty_row(file_path, 6)
+                num_tax_numbers = find_last_nonempty_row(csv_file_path, 6)
             except:
-                self.message_signal.message_signal.emit('FAIL!!!!!!!!!', 'CSV 인코딩이 예상과 다릅니다!', 'warning')
+                self.message_signal.message_signal.emit('변환 실패', f"CSV 인코딩이 예상과 다릅니다!{csv_file_path}", 'warning')
                 sys.exit(1)
             if (num_tax_numbers > 5):
                 invalid_file_list.append(filename)
@@ -235,87 +352,93 @@ class ConverterThread(QThread):
 
             xml_file_path = os.path.join(contents_dir , xml_file)
 
-            xml_output_result = replace_values_in_xml(file_path, xml_file_path)
-            # try:
-            #     xml_output_result = replace_values_in_xml(file_path, xml_file_path)
-            # except Exception as e:
-            #     self.message_signal.message_signal.emit('변환 실패', f"템플릿 Hwp 파일 '{xml_file}'에서 잘못된 형식의 '%변수%'가 존재합니다. '{xml_file}' 를 올바르게 수정한 뒤 다시 시도해 주세요.", 'warning')
-            #     sys.exit(1)                    
-            # '%영문자숫자%' 패턴의 문자열을 제거합니다.
-            # xml_output_result = re.sub(r'%[a-zA-Z0-9]+%', '', xml_output_result)
+
+
+
+
+
+        #     # try:
+        #     #     xml_output_result = replace_values_in_xml(file_path, xml_file_path)
+        #     # except Exception as e:
+        #     #     self.message_signal.message_signal.emit('변환 실패', f"템플릿 Hwp 파일 '{xml_file}'에서 잘못된 형식의 '%변수%'가 존재합니다. '{xml_file}' 를 올바르게 수정한 뒤 다시 시도해 주세요.", 'warning')
+        #     #     sys.exit(1)                    
+        #     # '%영문자숫자%' 패턴의 문자열을 제거합니다.
+        #     # xml_output_result = re.sub(r'%[a-zA-Z0-9]+%', '', xml_output_result)
            
-            # 디렉토리를 복사합니다.
-            gen_hwpx_file_name = os.path.splitext(filename)[0]
-            gen_hwpx_dir = os.path.join(self.directory, gen_hwpx_file_name)
+        #     # 디렉토리를 복사합니다.
+        #     gen_hwpx_file_name = os.path.splitext(filename)[0]
+        #     gen_hwpx_dir = os.path.join(self.directory, gen_hwpx_file_name)
 
-            # 디렉토리가 존재하는지 확인합니다.
-            if os.path.exists(gen_hwpx_dir):
-                # 디렉토리를 삭제합니다.
-                try:
-                    shutil.rmtree(gen_hwpx_dir)
-                except OSError as e:
-                    self.message_signal.message_signal.emit('변환 실패', f"기존에 생성된 디렉토리 '{gen_hwpx_dir}'를 삭제할 수 없습니다. '{gen_hwpx_dir}' 를 삭제한 뒤 다시 시도해 주세요. 오류: {e}", 'warning')
-                    sys.exit(1)
-            shutil.copytree(hwpx_dir, gen_hwpx_dir)
-            gen_contents_dir = os.path.join(gen_hwpx_dir, 'Contents')
-            gen_xml_file_path = os.path.join(gen_contents_dir , xml_file)
+        #     # 디렉토리가 존재하는지 확인합니다.
+        #     if os.path.exists(gen_hwpx_dir):
+        #         # 디렉토리를 삭제합니다.
+        #         try:
+        #             shutil.rmtree(gen_hwpx_dir)
+        #         except OSError as e:
+        #             self.message_signal.message_signal.emit('변환 실패', f"기존에 생성된 디렉토리 '{gen_hwpx_dir}'를 삭제할 수 없습니다. '{gen_hwpx_dir}' 를 삭제한 뒤 다시 시도해 주세요. 오류: {e}", 'warning')
+        #             sys.exit(1)
+        #     shutil.copytree(hwpx_dir, gen_hwpx_dir)
+        #     gen_contents_dir = os.path.join(gen_hwpx_dir, 'Contents')
+        #     gen_xml_file_path = os.path.join(gen_contents_dir , xml_file)
 
-            with open(gen_xml_file_path, 'wt', encoding='UTF-8') as output_file:
-                output_file.write(xml_output_result)
+        #     with open(gen_xml_file_path, 'wt', encoding='UTF-8') as output_file:
+        #         output_file.write(xml_output_result)
     
-            # 디렉토리를 zip 파일로 압축합니다.
-            gen_zip_file_name_path = os.path.join(self.directory, gen_hwpx_file_name)
+        #     # 디렉토리를 zip 파일로 압축합니다.
+        #     gen_zip_file_name_path = os.path.join(self.directory, gen_hwpx_file_name)
 
-            gen_zip_file_path = f'{gen_zip_file_name_path}.zip'
+        #     gen_zip_file_path = f'{gen_zip_file_name_path}.zip'
 
-            gen_hwpx_file = f'{gen_hwpx_file_name}.hwpx'
-            gen_hwpx_file_path = os.path.join(self.directory, gen_hwpx_file)
+        #     gen_hwpx_file = f'{gen_hwpx_file_name}.hwpx'
+        #     gen_hwpx_file_path = os.path.join(self.directory, gen_hwpx_file)
 
-            # zip 파일이 존재하는지 확인합니다.
-            if os.path.exists(gen_zip_file_path):
-                # 파일을 삭제합니다.
-                os.remove(gen_zip_file_path)
+        #     # zip 파일이 존재하는지 확인합니다.
+        #     if os.path.exists(gen_zip_file_path):
+        #         # 파일을 삭제합니다.
+        #         os.remove(gen_zip_file_path)
 
-            # Hwpx 파일이 존재하는지 확인합니다.
-            if os.path.exists(gen_hwpx_file_path):
-                # 파일 이름을 삭제합니다.
-                try:
-                    os.remove(gen_hwpx_file_path)
-                except OSError as e:
-                    self.message_signal.message_signal.emit('변환 실패', f"기존에 생성된 Hwp 파일 '{gen_hwpx_file_path}'를 삭제할 수 없습니다. 열린 '{gen_hwpx_file_path}' 를 닫은 뒤 다시 시도해 주세요. 오류: {e}", 'warning')
-                    sys.exit(1)
+        #     # Hwpx 파일이 존재하는지 확인합니다.
+        #     if os.path.exists(gen_hwpx_file_path):
+        #         # 파일 이름을 삭제합니다.
+        #         try:
+        #             os.remove(gen_hwpx_file_path)
+        #         except OSError as e:
+        #             self.message_signal.message_signal.emit('변환 실패', f"기존에 생성된 Hwp 파일 '{gen_hwpx_file_path}'를 삭제할 수 없습니다. 열린 '{gen_hwpx_file_path}' 를 닫은 뒤 다시 시도해 주세요. 오류: {e}", 'warning')
+        #             sys.exit(1)
                 
 
-            shutil.make_archive(gen_zip_file_name_path, 'zip', gen_hwpx_dir)
+        #     shutil.make_archive(gen_zip_file_name_path, 'zip', gen_hwpx_dir)
 
-            # 디렉토리가 존재하는지 확인합니다.
-            if os.path.exists(gen_hwpx_dir):
-                # 디렉토리를 삭제합니다.
-                try:
-                    shutil.rmtree(gen_hwpx_dir)
-                except OSError as e:
-                    self.message_signal.message_signal.emit('변환 실패', f"기존에 생성된 디렉토리 '{gen_hwpx_dir}'를 삭제할 수 없습니다. '{gen_hwpx_dir}' 를 삭제한 뒤 다시 시도해 주세요. 오류: {e}", 'warning')
-                    sys.exit(1)
+        #     # 디렉토리가 존재하는지 확인합니다.
+        #     if os.path.exists(gen_hwpx_dir):
+        #         # 디렉토리를 삭제합니다.
+        #         try:
+        #             shutil.rmtree(gen_hwpx_dir)
+        #         except OSError as e:
+        #             self.message_signal.message_signal.emit('변환 실패', f"기존에 생성된 디렉토리 '{gen_hwpx_dir}'를 삭제할 수 없습니다. '{gen_hwpx_dir}' 를 삭제한 뒤 다시 시도해 주세요. 오류: {e}", 'warning')
+        #             sys.exit(1)
 
-            shutil.copy(gen_zip_file_path, gen_hwpx_file_path)
+        #     shutil.copy(gen_zip_file_path, gen_hwpx_file_path)
 
-            # zip 파일이 존재하는지 확인합니다.
-            if os.path.exists(gen_zip_file_path):
-                # 파일을 삭제합니다.
-                os.remove(gen_zip_file_path)
+        #     # zip 파일이 존재하는지 확인합니다.
+        #     if os.path.exists(gen_zip_file_path):
+        #         # 파일을 삭제합니다.
+        #         os.remove(gen_zip_file_path)
 
-            time.sleep(1)  # 컨버팅 시뮬레이션을 위한 딜레이
-            progress_percent = int((i + 1) / total_files * 100)
-            self.progress_signal.emit(progress_percent)
+        #     time.sleep(1)  # 컨버팅 시뮬레이션을 위한 딜레이
+        #     progress_percent = int((i + 1) / total_files * 100)
+        #     self.progress_signal.emit(progress_percent)
 
-        appended_invalid_files = ''
-        for invalid_file in invalid_file_list:
-            appended_invalid_files += ', '
-            appended_invalid_files += invalid_file
+        # appended_invalid_files = ''
+        # for i, invalid_file in enumerate(invalid_file_list):
+        #     if i > 0:
+        #         appended_invalid_files += ', '
+        #     appended_invalid_files += invalid_file
 
-        if (appended_invalid_files != ''):
-            self.message_signal.message_signal.emit('Hwp로 변환 완료', f"변환 완료하였지만 (변환 Hwp 위치: '{self.directory}'), '{appended_invalid_files}'는 6개 이상 건수를 가지고 있어 변환할 수 없습니다!", 'warning')
-        self.message_signal.message_signal.emit('Hwp로 변환 완료', f"변환 완료하였습니다. (변환 Hwp 위치: '{self.directory}')", 'info')
+        # if (appended_invalid_files != ''):
+        #     self.message_signal.message_signal.emit('Hwp로 변환 완료', f"선택된 폴더 내의 xlsx 파일들을 모두 변환 하였지만 (변환된 Hwp 폴더 위치: '{self.directory}'), '{appended_invalid_files}' 파일들은 6개 이상 건수를 가지고 있어 변환할 수 없습니다!", 'warning')
+        # else:
+        #     self.message_signal.message_signal.emit('Hwp로 변환 완료', f"변환 완료하였습니다. (변환 Hwp 위치: '{self.directory}')", 'info')
 
 class ConverterApp(QWidget):
     def __init__(self):
@@ -369,8 +492,20 @@ class ConverterApp(QWidget):
     def conversion_completed(self):
         self.progress_dialog.hide()
 
-if __name__ == '__main__':
-    app = QApplication(sys.argv)
-    converter_app = ConverterApp()
-    converter_app.select_directory()  # Moved select_directory() out of __init__()
-    sys.exit(app.exec_())
+column_name = "AK2"             # Replace with the column name you want to extract
+csv_file_path = "C:\\work\\xml\\.hangulo\\교부청구서(최윤희).csv"
+# Example usage:
+# csv_file_path = "example.csv"   # Replace with the path to your CSV file
+row_index = 2                   # Replace with the row index you want to access (0-based index)
+column_name = "AK"               # Replace with the column name you want to access
+column_index = column_name_to_index(column_name)
+cell_value = get_csv_cell_value(csv_file_path, row_index, column_index)
+
+if cell_value is not None:
+    print(f"Value at row {row_index} and column {column_name}: {cell_value}")
+sys.exit(0)
+# if __name__ == '__main__':
+#     app = QApplication(sys.argv)
+#     converter_app = ConverterApp()
+#     converter_app.select_directory()  # Moved select_directory() out of __init__()
+#     sys.exit(app.exec_())
